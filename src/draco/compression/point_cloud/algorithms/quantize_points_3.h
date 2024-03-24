@@ -52,6 +52,8 @@ OutputIterator QuantizePoints3(const PointIterator &begin,
     qpoint[0] = quantize((*it)[0]) + max_quantized_value;
     qpoint[1] = quantize((*it)[1]) + max_quantized_value;
     qpoint[2] = quantize((*it)[2]) + max_quantized_value;
+    
+    // fprintf(stderr, "x=%f, %f, %f, q=%d, %d, %d\n");
     *oit++ = (qpoint);
   }
 

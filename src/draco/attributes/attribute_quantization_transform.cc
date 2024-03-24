@@ -226,17 +226,37 @@ void AttributeQuantizationTransform::GeneratePortableAttribute(
   const uint32_t max_quantized_value = (1 << (quantization_bits_)) - 1;
   Quantizer quantizer;
   quantizer.Init(range(), max_quantized_value);
+
+  Dequantizer dequantizer;
+  dequantizer.Init(range(), max_quantized_value);
+  fprintf(stderr, "range=%f\n", range());
+
   int32_t dst_index = 0;
   const std::unique_ptr<float[]> att_val(new float[num_components]);
+
+  double err = 0.0;
+
   for (PointIndex i(0); i < num_points; ++i) {
     const AttributeValueIndex att_val_id = attribute.mapped_index(i);
     attribute.GetValue(att_val_id, att_val.get());
     for (int c = 0; c < num_components; ++c) {
       const float value = (att_val[c] - min_values()[c]);
       const int32_t q_val = quantizer.QuantizeFloat(value);
+
+      const float value1 = dequantizer.DequantizeFloat(q_val); // + min_values_[c];
+      
+      err += (value1-value) * (value1-value); 
+      // fprintf(stderr, "x=%f, q=%d, x'=%f\n", att_val[c], q_val, value1);
+
       portable_attribute_data[dst_index++] = q_val;
     }
   }
+
+  const double mse = err / num_points / 3;
+  const double rmse = std::sqrt(mse);
+  const double nrmse = rmse / range_;
+  const double psnr = -20 * std::log10(nrmse);
+  fprintf(stderr, "psnr=%f\n", psnr);
 }
 
 void AttributeQuantizationTransform::GeneratePortableAttribute(

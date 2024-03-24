@@ -102,6 +102,7 @@ bool FloatPointsTreeDecoder::DecodePointCloudKdTreeInternal(
       oit(oit_qpoints);
   if (num_points_ > 0) {
     qpoints->reserve(num_points_);
+    fprintf(stderr, "My compression level=%d\n", compression_level_);
     switch (compression_level_) {
       case 0: {
         DynamicIntegerPointsKdTreeDecoder<0> qpoints_decoder(3);

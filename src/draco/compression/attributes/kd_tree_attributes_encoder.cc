@@ -238,6 +238,8 @@ bool KdTreeAttributesEncoder::EncodePortableAttributes(
     }
   }
 
+  // fprintf(stderr, "Here %d\n", compression_level);
+
   switch (compression_level) {
     case 6: {
       DynamicIntegerPointsKdTreeEncoder<6> points_encoder(num_components_);

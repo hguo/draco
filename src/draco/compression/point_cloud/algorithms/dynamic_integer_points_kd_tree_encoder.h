@@ -137,6 +137,7 @@ class DynamicIntegerPointsKdTreeEncoder {
     Splitter(uint32_t axis, uint32_t value) : axis_(axis), value_(value) {}
     template <class PointT>
     bool operator()(const PointT &a) const {
+      // fprintf(stderr, "a=%u, v=%u\n", a[axis_], value_);
       return a[axis_] < value_;
     }
 
@@ -152,14 +153,18 @@ class DynamicIntegerPointsKdTreeEncoder {
   template <class RandomAccessIteratorT>
   struct EncodingStatus {
     EncodingStatus(RandomAccessIteratorT begin_, RandomAccessIteratorT end_,
+                   std::vector<uint32_t>::iterator ibegin_, std::vector<uint32_t>::iterator iend_,
                    uint32_t last_axis_, uint32_t stack_pos_)
         : begin(begin_),
           end(end_),
+          ibegin(ibegin_),
+          iend(iend_),
           last_axis(last_axis_),
           stack_pos(stack_pos_) {
       num_remaining_points = static_cast<uint32_t>(end - begin);
     }
 
+    std::vector<uint32_t>::iterator ibegin, iend; // for recording ordering
     RandomAccessIteratorT begin;
     RandomAccessIteratorT end;
     uint32_t last_axis;
@@ -188,6 +193,8 @@ bool DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodePoints(
     const uint32_t &bit_length, EncoderBuffer *buffer) {
   bit_length_ = bit_length;
   num_points_ = static_cast<uint32_t>(end - begin);
+
+  // fprintf(stderr, "bitlen=%d, np=%d\n", bit_length_, num_points_);
 
   buffer->Encode(bit_length_);
   buffer->Encode(num_points_);
@@ -274,11 +281,22 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
     RandomAccessIteratorT begin, RandomAccessIteratorT end) {
   typedef EncodingStatus<RandomAccessIteratorT> Status;
 
+  // indices
+  const uint32_t nindices = static_cast<uint32_t>(end - begin);
+  std::vector<uint32_t> myindices(nindices);
+  for (auto i = 0; i < nindices; i ++)
+    myindices[i] = i;
+
   base_stack_[0] = VectorUint32(dimension_, 0);
   levels_stack_[0] = VectorUint32(dimension_, 0);
-  Status init_status(begin, end, 0, 0);
+  Status init_status(begin, end, myindices.begin(), myindices.end(), 0, 0);
   std::stack<Status> status_stack;
   status_stack.push(init_status);
+
+  uint32_t myid = 0;
+
+  std::vector<uint32_t>::iterator ibegin, iend;
+  const auto begin0 = begin;
 
   // TODO(b/199760123): Use preallocated vector instead of stack.
   while (!status_stack.empty()) {
@@ -287,6 +305,9 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
 
     begin = status.begin;
     end = status.end;
+    ibegin = status.ibegin;
+    iend = status.iend;
+
     const uint32_t last_axis = status.last_axis;
     const uint32_t stack_pos = status.stack_pos;
     const VectorUint32 &old_base = base_stack_[stack_pos];
@@ -296,6 +317,8 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
         GetAndEncodeAxis(begin, end, old_base, levels, last_axis);
     const uint32_t level = levels[axis];
     const uint32_t num_remaining_points = static_cast<uint32_t>(end - begin);
+
+    // fprintf(stderr, "num_remaining_points=%d\n", num_remaining_points);
 
     // If this happens all axis are subdivided to the end.
     if ((bit_length_ - level) == 0) {
@@ -313,6 +336,13 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
       }
       for (uint32_t i = 0; i < num_remaining_points; ++i) {
         const auto &p = *(begin + i);
+        
+        // fprintf(stderr, "myid=%d, p=%d, %d, %d, myid1=%u\n", myid, p[0], p[1], p[2], *(ibegin+i) );
+        // myid ++;
+        
+        // Hanqi note: if you need dump ordering, here's the place
+        // fprintf(stderr, "%u\n", *(ibegin+i) );
+
         for (uint32_t j = 0; j < dimension_; j++) {
           const uint32_t num_remaining_bits = bit_length_ - levels[axes_[j]];
           if (num_remaining_bits) {
@@ -329,9 +359,42 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
     base_stack_[stack_pos + 1] = old_base;  // copy
     base_stack_[stack_pos + 1][axis] += modifier;
     const VectorUint32 &new_base = base_stack_[stack_pos + 1];
+    
 
+    // figure out splits for indices
+    // for (auto i = 0; i < myindices.size(); i ++) 
+    //   fprintf(stderr, "%d\n", myindices[i]);
+
+    const auto val_ = new_base[axis];
+#if 0
+    fprintf(stderr, "val=%u\n", val_);
+    for (auto i = 0; i < num_remaining_points; i ++) 
+      fprintf(stderr, "x=%u,%u,%u val=%u\n", 
+          begin0[myindices[i]][0], 
+          begin0[myindices[i]][1], 
+          begin0[myindices[i]][2], 
+          val_);
+#endif
+    auto isplit = std::partition(ibegin, iend, 
+        [&](uint32_t i) {
+          // fprintf(stderr, "i=%d\n", i);
+          return begin0[myindices[i]][axis] < val_;
+        });
+
+
+    // split coords
     const RandomAccessIteratorT split =
         std::partition(begin, end, Splitter(axis, new_base[axis]));
+      
+#if 0
+    fprintf(stderr, "after split:\n");
+    for (int i = 0; i < myindices.size(); i ++) {
+      fprintf(stderr, "x=%u,%u,%u\n", 
+            begin0[i][0], 
+            begin0[i][1], 
+            begin0[i][2]);
+    }
+#endif
 
     DRACO_DCHECK_EQ(true, (end - begin) > 0);
 
@@ -354,13 +417,17 @@ void DynamicIntegerPointsKdTreeEncoder<compression_level_t>::EncodeInternal(
 
     levels_stack_[stack_pos][axis] += 1;
     levels_stack_[stack_pos + 1] = levels_stack_[stack_pos];  // copy
+    
     if (split != begin) {
-      status_stack.push(Status(begin, split, axis, stack_pos));
+      status_stack.push(Status(begin, split, ibegin, isplit, axis, stack_pos));
     }
     if (split != end) {
-      status_stack.push(Status(split, end, axis, stack_pos + 1));
+      status_stack.push(Status(split, end, isplit, iend, axis, stack_pos + 1));
     }
   }
+
+  // for (auto i = 0; i < myindices.size(); i ++) 
+  //   fprintf(stderr, "%d\n", myindices[i]);
 }
 extern template class DynamicIntegerPointsKdTreeEncoder<0>;
 extern template class DynamicIntegerPointsKdTreeEncoder<2>;
